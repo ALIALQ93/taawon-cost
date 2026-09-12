@@ -105,11 +105,25 @@
     return `<span class="chip none">✕ بدون تطابق</span>`;
   }
 
+  function costSourceLabel(costSource) {
+    if (costSource === 'avg') return 'السعر الوسطي';
+    if (costSource === 'last_purchase') return 'آخر شراء';
+    return null;
+  }
+
   function costCellHtml(s) {
     const eff = effective(s.item_code);
     if (eff.source === 'unresolved') return `<div class="cost-cell"><span class="pending">لم تُحسب بعد</span></div>`;
     if (eff.source === 'no_match') return `<div class="cost-cell"><span class="pending">بلا تكلفة مرجعية</span></div>`;
-    return `<div class="cost-cell"><span class="new">${fmtNum(eff.cost)} د.ع</span></div>`;
+    const unit = dominantUnitLabel(s);
+    let sub;
+    if (eff.source === 'manual_cost') sub = 'تكلفة يدوية';
+    else sub = costSourceLabel(eff.albayan && eff.albayan.cost_source) || '—';
+    return `<div class="cost-cell"><span class="new">${fmtNum(eff.cost)} د.ع</span><span class="old" style="text-decoration:none;color:var(--ink-dim);">لكل ${escapeHtml(unit)} · ${sub}</span></div>`;
+  }
+
+  function dominantUnitLabel(s) {
+    return (s.base_units && s.base_units[0]) || (s.units && s.units[0]) || 'وحدة';
   }
 
   function renderStats() {
@@ -190,8 +204,8 @@
           <div class="cand-meta">
             ${a.foreign_name ? escapeHtml(a.foreign_name) + ' · ' : ''}${a.scientific_name ? escapeHtml(a.scientific_name) + ' · ' : ''}
             ${a.barcode ? 'باركود ' + a.barcode + ' · ' : ''}
-            الوحدة: ${escapeHtml(a.base_unit || '—')} · التكلفة: ${a.cost != null ? fmtNum(a.cost) + ' د.ع' : 'غير متوفرة'}
-            ${a.cost_source === 'last_purchase' ? ' (آخر شراء)' : ''}
+            الوحدة: ${escapeHtml(a.base_unit || '—')} · التكلفة لكل ${escapeHtml(a.base_unit || 'وحدة')}:
+            ${a.cost != null ? fmtNum(a.cost) + ' د.ع (' + (costSourceLabel(a.cost_source) || 'بدون مصدر') + ')' : 'غير متوفرة بالبيان القديم'}
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
@@ -257,7 +271,7 @@
     body += `<div>
       <div class="section-title">أو أدخل تكلفة يدوياً (إن لم توجد مادة مطابقة في البيان)</div>
       <div class="manual-cost">
-        <input type="number" id="manualCostInput" placeholder="التكلفة لكل وحدة أساسية" value="${rev && rev.status === 'manual_cost' ? rev.cost_override : ''}">
+        <input type="number" id="manualCostInput" placeholder="التكلفة لكل ${escapeHtml(dominantUnitLabel(s))}" value="${rev && rev.status === 'manual_cost' ? rev.cost_override : ''}">
         <button class="btn" data-action="save-manual-cost">حفظ كتكلفة يدوية</button>
       </div>
     </div>`;
@@ -386,6 +400,7 @@
       }
 
       const priceListRows = [];
+      const sourceDetailRows = [];
       const unresolvedRows = [];
       let nMatchedBarcode = 0, nManual = 0, nUnresolved = 0;
 
@@ -404,11 +419,17 @@
         if (eff.source === 'barcode') nMatchedBarcode++;
         else nManual++;
 
+        const unitName = dominantBaseUnit(s.item_code) || s.base_units[0] || '';
+        const priceOriginLabel =
+          eff.source === 'manual_cost' ? 'تكلفة أُدخلت يدوياً (بدون مصدر من البيان)'
+          : costSourceLabel(eff.albayan && eff.albayan.cost_source) === 'آخر شراء' ? 'آخر سعر شراء بالبيان القديم (السعر الوسطي غير متوفر لهذه المادة)'
+          : 'السعر الوسطي بالبيان القديم';
+
         priceListRows.push({
           code: s.item_code,
           price_list_name: '',
           currency_name: 'IQD',
-          unit_name: dominantBaseUnit(s.item_code) || s.base_units[0] || '',
+          unit_name: unitName,
           price: Math.round(eff.cost),
           min_quantity: 1,
           max_quantity: '',
@@ -417,6 +438,17 @@
           max_foc_quantity: 0,
           discount_percentage: 0,
           discount_active: 'FALSE',
+        });
+
+        sourceDetailRows.push({
+          'كود المادة (code)': s.item_code,
+          'الاسم بSky': s.name,
+          'الوحدة (unit_name)': unitName,
+          'السعر المصدَّر (price)': Math.round(eff.cost),
+          'مصدر هذا السعر': priceOriginLabel,
+          'طريقة المطابقة': eff.source === 'barcode' ? 'تلقائية بالباركود' : eff.source === 'manual_match' ? 'يدوية مؤكدة' : 'تكلفة يدوية بدون مطابقة',
+          'اسم المادة المطابقة بالبيان': eff.albayan ? eff.albayan.name : '',
+          'باركود المادة المطابقة بالبيان': eff.albayan ? eff.albayan.barcode_raw : '',
         });
       }
 
@@ -429,6 +461,7 @@
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(priceListRows), 'Prices');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sourceDetailRows), 'مصدر كل سعر');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(unresolvedRows), 'غير محلول');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'ملخص');
 

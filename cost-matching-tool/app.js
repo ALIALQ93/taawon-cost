@@ -2,7 +2,7 @@
   'use strict';
 
   const PAGE_SIZE = 40;
-  const SHARD_COUNT = 24;
+  const STORAGE_KEY = 'taawon_cost_reviews_v1';
 
   const state = {
     albayan: [],          // array, index === idx
@@ -13,8 +13,6 @@
     search: '',
     branch: '',
     page: 1,
-    db: null,
-    downloads: null,
     activeCode: null,
     modalSearch: '',
   };
@@ -25,12 +23,6 @@
   function fmtNum(n) {
     if (n === null || n === undefined || Number.isNaN(n)) return '—';
     return Math.round(n).toLocaleString('en-US');
-  }
-
-  function shardFor(code) {
-    let h = 0;
-    for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
-    return h % SHARD_COUNT;
   }
 
   function effective(code) {
@@ -322,54 +314,42 @@
     });
   }
 
-  // ---------------- db persistence ----------------
+  // ---------------- local persistence (localStorage) ----------------
+  // Reviews are saved only in this browser/device. Export the Excel file
+  // regularly if you review from more than one computer.
 
-  async function loadReviews() {
-    if (!state.db) return;
+  function loadReviews() {
     try {
-      const snap = await state.db.collection('reviews').get();
-      const merged = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() || {};
-        Object.assign(merged, data);
-      });
-      state.reviews = merged;
+      const raw = localStorage.getItem(STORAGE_KEY);
+      state.reviews = raw ? JSON.parse(raw) : {};
     } catch (e) {
       console.warn('loadReviews failed', e);
+      state.reviews = {};
     }
   }
 
-  async function saveReview(code, entry) {
+  function persistReviews() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.reviews));
+      return true;
+    } catch (e) {
+      console.warn('persistReviews failed', e);
+      return false;
+    }
+  }
+
+  function saveReview(code, entry) {
     state.reviews[code] = entry;
     renderAll();
     renderModal();
-    if (!state.db) { toast('تم الحفظ محلياً (لا يوجد اتصال بقاعدة البيانات)'); return; }
-    try {
-      const ref = state.db.collection('reviews').doc('shard-' + shardFor(code));
-      const snap = await ref.get();
-      if (snap.exists) await ref.update({ [code]: entry });
-      else await ref.set({ [code]: entry });
-      toast('تم الحفظ');
-    } catch (e) {
-      console.warn('saveReview failed', e);
-      toast('تعذّر الحفظ في القاعدة، حاول مجدداً');
-    }
+    toast(persistReviews() ? 'تم الحفظ على هذا الجهاز' : 'تعذّر الحفظ محلياً (تحقق من إعدادات المتصفح)');
   }
 
-  async function clearReview(code) {
+  function clearReview(code) {
     delete state.reviews[code];
     renderAll();
     renderModal();
-    if (!state.db) return;
-    try {
-      const ref = state.db.collection('reviews').doc('shard-' + shardFor(code));
-      const snap = await ref.get();
-      if (snap.exists) {
-        const data = snap.data() || {};
-        delete data[code];
-        await ref.set(data);
-      }
-    } catch (e) { console.warn('clearReview failed', e); }
+    persistReviews();
   }
 
   function toast(msg) {
@@ -457,12 +437,15 @@
       const blob = new Blob([wbout], { type: 'application/octet-stream' });
 
       const fname = 'تصحيح-كلفة-بضاعة-اول-المدة-' + new Date().toISOString().slice(0, 10) + '.xlsx';
-      if (state.downloads) {
-        const r = await state.downloads.save({ filename: fname, data: blob });
-        toast(r.status === 'saved' ? 'تم حفظ الملف' : 'تم تسليم الملف');
-      } else {
-        toast('تعذّر الوصول لخدمة التنزيل في هذا العرض');
-      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast('تم تنزيل الملف');
     } catch (e) {
       console.error(e);
       toast('حدث خطأ أثناء إنشاء الملف');
@@ -490,14 +473,7 @@
       return;
     }
 
-    try {
-      if (window.claude && typeof window.claude.use === 'function') {
-        state.db = await window.claude.use('db');
-        state.downloads = await window.claude.use('downloads');
-      }
-    } catch (e) { console.warn('capabilities unavailable', e); }
-
-    if (state.db) await loadReviews();
+    loadReviews();
 
     $('#loading').hidden = true;
     $('#appShell').hidden = false;

@@ -371,72 +371,71 @@
       const res = await fetch('data/sky_lines.json');
       const lines = await res.json();
 
-      const correctedRows = [];
-      const unresolvedMap = new Map();
-      let sumOld = 0, sumNew = 0, nMatchedBarcode = 0, nManual = 0, nUnresolved = 0;
-
+      // dominant base unit per item (most frequent across its lines)
+      const baseUnitCounts = new Map(); // item_code -> Map(unit -> count)
       for (const l of lines) {
-        const eff = effective(l.item_code);
-        const cf = l.conv_factor || 1;
-        let correctedUnitPrice = null, correctedTotal = null, source = eff.source;
-        if (eff.cost != null) {
-          correctedUnitPrice = eff.cost * cf;
-          correctedTotal = correctedUnitPrice * (l.qty_entered || 0);
-        }
-        sumOld += l.total_amount || 0;
-        sumNew += (correctedTotal != null ? correctedTotal : (l.total_amount || 0));
-        if (source === 'barcode') nMatchedBarcode++;
-        else if (source === 'manual_match' || source === 'manual_cost') nManual++;
-        else {
-          nUnresolved++;
-          const s = state.skyItems.find((x) => x.item_code === l.item_code);
-          unresolvedMap.set(l.item_code, s ? s.name : l.trade_name);
-        }
+        if (!l.base_unit) continue;
+        if (!baseUnitCounts.has(l.item_code)) baseUnitCounts.set(l.item_code, new Map());
+        const m = baseUnitCounts.get(l.item_code);
+        m.set(l.base_unit, (m.get(l.base_unit) || 0) + 1);
+      }
+      function dominantBaseUnit(code) {
+        const m = baseUnitCounts.get(code);
+        if (!m || !m.size) return '';
+        return Array.from(m.entries()).sort((a, b) => b[1] - a[1])[0][0];
+      }
 
-        correctedRows.push({
-          'رقم الوثيقة': l.doc_no,
-          'الفرع': l.branch,
-          'كود المادة': l.item_code,
-          'الاسم التجاري': l.trade_name,
-          'الوحدة': l.unit,
-          'الوحدة الأساسية': l.base_unit,
-          'معامل التحويل': cf,
-          'الكمية المدخلة': l.qty_entered,
-          'سعر الوحدة (القديم)': l.unit_price,
-          'المبلغ الإجمالي (القديم)': l.total_amount,
-          'التكلفة الصحيحة لكل وحدة أساسية': eff.cost,
-          'سعر الوحدة (المصحح)': correctedUnitPrice,
-          'المبلغ الإجمالي (المصحح)': correctedTotal,
-          'الفرق': correctedTotal != null ? Math.round((correctedTotal - (l.total_amount || 0)) * 100) / 100 : null,
-          'مصدر التكلفة': source === 'barcode' ? 'مطابقة باركود تلقائية' : source === 'manual_match' ? 'مطابقة يدوية مؤكدة' : source === 'manual_cost' ? 'تكلفة يدوية' : source === 'no_match' ? 'بلا تطابق - بحاجة تسعير يدوي' : 'غير محلول',
-          'باركود مادة البيان المطابقة': eff.albayan ? eff.albayan.barcode_raw : '',
-          'اسم مادة البيان المطابقة': eff.albayan ? eff.albayan.name : '',
-          'رقم الوجبة': l.batch,
-          'تاريخ الصلاحية': l.expiry,
+      const priceListRows = [];
+      const unresolvedRows = [];
+      let nMatchedBarcode = 0, nManual = 0, nUnresolved = 0;
+
+      for (const s of state.skyItems) {
+        const eff = effective(s.item_code);
+        if (eff.cost == null) {
+          nUnresolved++;
+          unresolvedRows.push({
+            'كود المادة': s.item_code,
+            'الاسم التجاري': s.name,
+            'الفروع': s.branches.join('، '),
+            'الحالة': eff.source === 'no_match' ? 'معلّمة: بلا تطابق' : 'بدون مراجعة بعد',
+          });
+          continue;
+        }
+        if (eff.source === 'barcode') nMatchedBarcode++;
+        else nManual++;
+
+        priceListRows.push({
+          code: s.item_code,
+          price_list_name: '',
+          currency_name: 'IQD',
+          unit_name: dominantBaseUnit(s.item_code) || s.base_units[0] || '',
+          price: Math.round(eff.cost),
+          min_quantity: 1,
+          max_quantity: '',
+          foc_for_each: 0,
+          foc_quantity: 0,
+          max_foc_quantity: 0,
+          discount_percentage: 0,
+          discount_active: 'FALSE',
         });
       }
 
-      const unresolvedRows = Array.from(unresolvedMap.entries()).map(([code, name]) => ({ 'كود المادة': code, 'الاسم التجاري': name }));
-
       const summaryRows = [
-        { 'البيان': 'إجمالي أسطر الإدخال', 'القيمة': lines.length },
-        { 'البيان': 'أسطر مطابقة تلقائياً بالباركود', 'القيمة': nMatchedBarcode },
-        { 'البيان': 'أسطر تمت مطابقتها/تسعيرها يدوياً', 'القيمة': nManual },
-        { 'البيان': 'أسطر بدون تصحيح (غير محلولة)', 'القيمة': nUnresolved },
-        { 'البيان': 'إجمالي القيمة القديمة (الخاطئة)', 'القيمة': Math.round(sumOld) },
-        { 'البيان': 'إجمالي القيمة بعد التصحيح', 'القيمة': Math.round(sumNew) },
-        { 'البيان': 'الفرق الإجمالي', 'القيمة': Math.round(sumNew - sumOld) },
+        { 'البيان': 'إجمالي مواد Sky', 'القيمة': state.skyItems.length },
+        { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة بالباركود)', 'القيمة': nMatchedBarcode },
+        { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة/تسعير يدوي)', 'القيمة': nManual },
+        { 'البيان': 'مواد بدون تكلفة بعد (غير محلولة)', 'القيمة': nUnresolved },
       ];
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(correctedRows), 'تصحيح الكلفة');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(priceListRows), 'Prices');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(unresolvedRows), 'غير محلول');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'ملخص');
 
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([wbout], { type: 'application/octet-stream' });
 
-      const fname = 'تصحيح-كلفة-بضاعة-اول-المدة-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      const fname = 'قائمة-اسعار-Sky-' + new Date().toISOString().slice(0, 10) + '.xlsx';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

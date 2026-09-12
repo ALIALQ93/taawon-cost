@@ -4,7 +4,7 @@
     {
       "name": "cost-matching-preview",
       "runtimeExecutable": "C:/Python313/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8843", "--directory", "cost-matching-tool"],
+      "runtimeArgs": ["-m", "http.server", "8843", "--directory", "docs"],
       "port": 8843
     }
   ]

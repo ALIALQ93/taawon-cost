@@ -1,0 +1,526 @@
+(() => {
+  'use strict';
+
+  const PAGE_SIZE = 40;
+  const SHARD_COUNT = 24;
+
+  const state = {
+    albayan: [],          // array, index === idx
+    skyItems: [],          // array
+    matches: {},           // item_code -> match info
+    reviews: {},           // item_code -> {status, albayan_idx, cost_override, ts}
+    filter: 'all',
+    search: '',
+    branch: '',
+    page: 1,
+    db: null,
+    downloads: null,
+    activeCode: null,
+    modalSearch: '',
+  };
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  function fmtNum(n) {
+    if (n === null || n === undefined || Number.isNaN(n)) return '—';
+    return Math.round(n).toLocaleString('en-US');
+  }
+
+  function shardFor(code) {
+    let h = 0;
+    for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
+    return h % SHARD_COUNT;
+  }
+
+  function effective(code) {
+    const rev = state.reviews[code];
+    if (rev) {
+      if (rev.status === 'confirmed' && rev.albayan_idx != null) {
+        const a = state.albayan[rev.albayan_idx];
+        return { source: 'manual_match', cost: a ? a.cost : null, albayan: a, albayan_idx: rev.albayan_idx, review: rev };
+      }
+      if (rev.status === 'manual_cost') {
+        return { source: 'manual_cost', cost: rev.cost_override, albayan: null, albayan_idx: null, review: rev };
+      }
+      if (rev.status === 'no_match') {
+        return { source: 'no_match', cost: null, albayan: null, albayan_idx: null, review: rev };
+      }
+    }
+    const m = state.matches[code];
+    if (m && m.status === 'matched' && m.albayan_idx != null) {
+      const a = state.albayan[m.albayan_idx];
+      return { source: 'barcode', cost: a ? a.cost : null, albayan: a, albayan_idx: m.albayan_idx, review: null };
+    }
+    return { source: 'unresolved', cost: null, albayan: null, albayan_idx: null, review: null };
+  }
+
+  function statusOf(code) {
+    const eff = effective(code);
+    if (eff.source === 'barcode') return 'matched';
+    if (eff.source === 'manual_match' || eff.source === 'manual_cost') return 'confirmed';
+    if (eff.source === 'no_match') return 'confirmed';
+    const m = state.matches[code];
+    if (m && m.status === 'needs_review') return 'review';
+    return 'none';
+  }
+
+  function counts() {
+    const c = { all: state.skyItems.length, matched: 0, review: 0, none: 0, confirmed: 0 };
+    for (const s of state.skyItems) {
+      const st = statusOf(s.item_code);
+      if (st === 'matched') c.matched++;
+      else if (st === 'review') c.review++;
+      else if (st === 'none') c.none++;
+      if (state.reviews[s.item_code]) c.confirmed++;
+    }
+    return c;
+  }
+
+  function branchList() {
+    const set = new Set();
+    for (const s of state.skyItems) for (const b of s.branches) if (b) set.add(b);
+    return Array.from(set).sort();
+  }
+
+  function filteredItems() {
+    let arr = state.skyItems;
+    if (state.filter !== 'all') {
+      arr = arr.filter((s) => {
+        const st = statusOf(s.item_code);
+        if (state.filter === 'reviewed') return !!state.reviews[s.item_code];
+        return st === state.filter;
+      });
+    }
+    if (state.branch) {
+      arr = arr.filter((s) => s.branches.includes(state.branch));
+    }
+    if (state.search.trim()) {
+      const q = state.search.trim().toLowerCase();
+      arr = arr.filter((s) => (s.name || '').toLowerCase().includes(q) || s.item_code.includes(q));
+    }
+    return arr;
+  }
+
+  // ---------------- rendering ----------------
+
+  function chipHtml(code) {
+    const st = statusOf(code);
+    const rev = state.reviews[code];
+    if (rev) return `<span class="chip confirmed">✓ روجعت يدوياً</span>`;
+    if (st === 'matched') return `<span class="chip matched">✓ مطابق بالباركود</span>`;
+    if (st === 'review') return `<span class="chip review">⚠ بحاجة مراجعة</span>`;
+    return `<span class="chip none">✕ بدون تطابق</span>`;
+  }
+
+  function costCellHtml(s) {
+    const eff = effective(s.item_code);
+    if (eff.source === 'unresolved') return `<div class="cost-cell"><span class="pending">لم تُحسب بعد</span></div>`;
+    if (eff.source === 'no_match') return `<div class="cost-cell"><span class="pending">بلا تكلفة مرجعية</span></div>`;
+    return `<div class="cost-cell"><span class="new">${fmtNum(eff.cost)} د.ع</span></div>`;
+  }
+
+  function renderStats() {
+    const c = counts();
+    $('#statAll .num').textContent = fmtNum(c.all);
+    $('#statMatched .num').textContent = fmtNum(c.matched);
+    $('#statReview .num').textContent = fmtNum(c.review);
+    $('#statNone .num').textContent = fmtNum(c.none);
+    $('#statConfirmed .num').textContent = fmtNum(c.confirmed);
+    $$('.stat-tile').forEach((t) => t.classList.toggle('active', t.dataset.filter === state.filter));
+  }
+
+  function renderBranchOptions() {
+    const sel = $('#branchSelect');
+    if (sel.dataset.filled) return;
+    sel.dataset.filled = '1';
+    for (const b of branchList()) {
+      const o = document.createElement('option');
+      o.value = b; o.textContent = b;
+      sel.appendChild(o);
+    }
+  }
+
+  function renderList() {
+    const arr = filteredItems();
+    const totalPages = Math.max(1, Math.ceil(arr.length / PAGE_SIZE));
+    state.page = Math.min(state.page, totalPages);
+    const start = (state.page - 1) * PAGE_SIZE;
+    const pageItems = arr.slice(start, start + PAGE_SIZE);
+
+    const list = $('#list');
+    if (!pageItems.length) {
+      list.innerHTML = `<div class="empty-state">لا توجد مواد تطابق عوامل التصفية الحالية</div>`;
+    } else {
+      list.innerHTML = pageItems.map((s) => `
+        <div class="row-card" data-code="${s.item_code}">
+          <div class="row-main">
+            <div class="row-name">${escapeHtml(s.name || '(بدون اسم)')}</div>
+            <div class="row-meta">
+              <code>${s.item_code}</code>
+              <span>${escapeHtml(s.category || '')}</span>
+              <span>${s.branches.length} فرع</span>
+              <span>${s.n_lines} سطر</span>
+            </div>
+          </div>
+          ${chipHtml(s.item_code)}
+          ${costCellHtml(s)}
+        </div>
+      `).join('');
+      $$('.row-card', list).forEach((el) => el.addEventListener('click', () => openModal(el.dataset.code)));
+    }
+
+    $('#pagerInfo').textContent = `صفحة ${state.page} من ${totalPages} — ${fmtNum(arr.length)} مادة`;
+    $('#prevPage').disabled = state.page <= 1;
+    $('#nextPage').disabled = state.page >= totalPages;
+  }
+
+  function renderAll() {
+    renderStats();
+    renderBranchOptions();
+    renderList();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ---------------- modal ----------------
+
+  function candidateCardHtml(cand, chosenIdx, scoreLabel) {
+    const a = state.albayan[cand.albayan_idx];
+    if (!a) return '';
+    const chosen = chosenIdx === cand.albayan_idx;
+    return `
+      <div class="candidate ${chosen ? 'chosen' : ''}" data-idx="${cand.albayan_idx}">
+        <div>
+          <div class="cand-name">${escapeHtml(a.name || '(بدون اسم)')}</div>
+          <div class="cand-meta">
+            ${a.foreign_name ? escapeHtml(a.foreign_name) + ' · ' : ''}${a.scientific_name ? escapeHtml(a.scientific_name) + ' · ' : ''}
+            ${a.barcode ? 'باركود ' + a.barcode + ' · ' : ''}
+            الوحدة: ${escapeHtml(a.base_unit || '—')} · التكلفة: ${a.cost != null ? fmtNum(a.cost) + ' د.ع' : 'غير متوفرة'}
+            ${a.cost_source === 'last_purchase' ? ' (آخر شراء)' : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+          ${scoreLabel ? `<span class="cand-score">${scoreLabel}</span>` : ''}
+          <button class="btn ${chosen ? 'primary' : ''}" data-action="confirm-cand" data-idx="${cand.albayan_idx}">${chosen ? '✓ مُعتمدة' : 'اعتماد هذه المطابقة'}</button>
+        </div>
+      </div>`;
+  }
+
+  function openModal(code) {
+    state.activeCode = code;
+    state.modalSearch = '';
+    const s = state.skyItems.find((x) => x.item_code === code);
+    if (!s) return;
+    const overlay = $('#overlay');
+    overlay.hidden = false;
+    renderModal();
+  }
+
+  function closeModal() {
+    $('#overlay').hidden = true;
+    state.activeCode = null;
+  }
+
+  function renderModal() {
+    const code = state.activeCode;
+    if (!code) return;
+    const s = state.skyItems.find((x) => x.item_code === code);
+    const m = state.matches[code] || { candidates: [] };
+    const rev = state.reviews[code];
+    const eff = effective(code);
+
+    $('#modalTitle').textContent = s.name || '(بدون اسم)';
+    $('#modalSub').textContent = `كود ${s.item_code} · ${s.branches.join('، ')} · ${s.n_lines} سطر إدخال`;
+
+    let body = '';
+    body += `<div class="info-grid">
+      <div><span>الفئة</span>${escapeHtml(s.category || '—')}</div>
+      <div><span>العلامة التجارية</span>${escapeHtml(s.brand || '—')}</div>
+      <div><span>الوحدات المستخدمة</span>${escapeHtml(s.units.join('، ') || '—')}</div>
+      <div><span>الوحدة الأساسية</span>${escapeHtml(s.base_units.join('، ') || '—')}</div>
+    </div>`;
+
+    if (eff.source === 'barcode') {
+      body += `<div>
+        <div class="section-title">مطابقة تلقائية بالباركود ${s.barcode ? '(' + s.barcode + ')' : ''}</div>
+        ${candidateCardHtml({ albayan_idx: eff.albayan_idx }, null, null)}
+      </div>`;
+    }
+
+    if (eff.source !== 'barcode' && m.candidates && m.candidates.length) {
+      body += `<div><div class="section-title">اقتراحات للمطابقة اليدوية</div>`;
+      body += m.candidates.map((c) => candidateCardHtml(c, rev && rev.albayan_idx, 'تقارب ' + Math.round(c.score * 100) + '%')).join('');
+      body += `</div>`;
+    }
+
+    body += `<div>
+      <div class="section-title">بحث يدوي في ملف البيان القديم</div>
+      <input type="search" id="modalSearchBox" placeholder="ابحث بالاسم أو الباركود..." style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:inherit;">
+      <div class="search-results" id="modalSearchResults" style="margin-top:8px;"></div>
+    </div>`;
+
+    body += `<div>
+      <div class="section-title">أو أدخل تكلفة يدوياً (إن لم توجد مادة مطابقة في البيان)</div>
+      <div class="manual-cost">
+        <input type="number" id="manualCostInput" placeholder="التكلفة لكل وحدة أساسية" value="${rev && rev.status === 'manual_cost' ? rev.cost_override : ''}">
+        <button class="btn" data-action="save-manual-cost">حفظ كتكلفة يدوية</button>
+      </div>
+    </div>`;
+
+    body += `<div style="display:flex; gap:8px;">
+      <button class="btn" data-action="mark-no-match" style="flex:1;">${rev && rev.status === 'no_match' ? '✓ مُعلّمة: بلا تطابق' : 'تعليم: بلا تطابق (بحاجة تسعير يدوي لاحقاً في Sky)'}</button>
+      ${rev ? `<button class="btn ghost" data-action="clear-review">مسح المراجعة</button>` : ''}
+    </div>`;
+
+    $('#modalBody').innerHTML = body;
+
+    $$('[data-action="confirm-cand"]', $('#modalBody')).forEach((btn) => {
+      btn.addEventListener('click', () => saveReview(code, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null, ts: Date.now() }));
+    });
+    const searchBox = $('#modalSearchBox');
+    if (searchBox) {
+      searchBox.addEventListener('input', (e) => {
+        state.modalSearch = e.target.value;
+        renderModalSearch();
+      });
+    }
+    const manualBtn = $('[data-action="save-manual-cost"]', $('#modalBody'));
+    if (manualBtn) manualBtn.addEventListener('click', () => {
+      const val = parseFloat($('#manualCostInput').value);
+      if (!val || val <= 0) { toast('أدخل رقماً صحيحاً أكبر من صفر'); return; }
+      saveReview(code, { status: 'manual_cost', albayan_idx: null, cost_override: val, ts: Date.now() });
+    });
+    const noMatchBtn = $('[data-action="mark-no-match"]', $('#modalBody'));
+    if (noMatchBtn) noMatchBtn.addEventListener('click', () => saveReview(code, { status: 'no_match', albayan_idx: null, cost_override: null, ts: Date.now() }));
+    const clearBtn = $('[data-action="clear-review"]', $('#modalBody'));
+    if (clearBtn) clearBtn.addEventListener('click', () => clearReview(code));
+
+    renderModalSearch();
+  }
+
+  function renderModalSearch() {
+    const box = $('#modalSearchResults');
+    if (!box) return;
+    const q = state.modalSearch.trim().toLowerCase();
+    if (q.length < 2) { box.innerHTML = ''; return; }
+    const rev = state.reviews[state.activeCode];
+    const results = [];
+    for (const a of state.albayan) {
+      const hay = (a.name + ' ' + a.foreign_name + ' ' + a.scientific_name + ' ' + (a.barcode_raw || '')).toLowerCase();
+      if (hay.includes(q)) {
+        results.push(a);
+        if (results.length >= 25) break;
+      }
+    }
+    if (!results.length) { box.innerHTML = `<div style="padding:10px;font-size:12.5px;color:var(--ink-dim);">لا نتائج</div>`; return; }
+    box.innerHTML = results.map((a) => candidateCardHtml({ albayan_idx: a.idx }, rev && rev.albayan_idx, null)).join('');
+    $$('[data-action="confirm-cand"]', box).forEach((btn) => {
+      btn.addEventListener('click', () => saveReview(state.activeCode, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null, ts: Date.now() }));
+    });
+  }
+
+  // ---------------- db persistence ----------------
+
+  async function loadReviews() {
+    if (!state.db) return;
+    try {
+      const snap = await state.db.collection('reviews').get();
+      const merged = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() || {};
+        Object.assign(merged, data);
+      });
+      state.reviews = merged;
+    } catch (e) {
+      console.warn('loadReviews failed', e);
+    }
+  }
+
+  async function saveReview(code, entry) {
+    state.reviews[code] = entry;
+    renderAll();
+    renderModal();
+    if (!state.db) { toast('تم الحفظ محلياً (لا يوجد اتصال بقاعدة البيانات)'); return; }
+    try {
+      const ref = state.db.collection('reviews').doc('shard-' + shardFor(code));
+      const snap = await ref.get();
+      if (snap.exists) await ref.update({ [code]: entry });
+      else await ref.set({ [code]: entry });
+      toast('تم الحفظ');
+    } catch (e) {
+      console.warn('saveReview failed', e);
+      toast('تعذّر الحفظ في القاعدة، حاول مجدداً');
+    }
+  }
+
+  async function clearReview(code) {
+    delete state.reviews[code];
+    renderAll();
+    renderModal();
+    if (!state.db) return;
+    try {
+      const ref = state.db.collection('reviews').doc('shard-' + shardFor(code));
+      const snap = await ref.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        delete data[code];
+        await ref.set(data);
+      }
+    } catch (e) { console.warn('clearReview failed', e); }
+  }
+
+  function toast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2200);
+  }
+
+  // ---------------- export ----------------
+
+  async function exportExcel() {
+    const btn = $('#exportBtn');
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'جاري التحضير...';
+    try {
+      const res = await fetch('data/sky_lines.json');
+      const lines = await res.json();
+
+      const correctedRows = [];
+      const unresolvedMap = new Map();
+      let sumOld = 0, sumNew = 0, nMatchedBarcode = 0, nManual = 0, nUnresolved = 0;
+
+      for (const l of lines) {
+        const eff = effective(l.item_code);
+        const cf = l.conv_factor || 1;
+        let correctedUnitPrice = null, correctedTotal = null, source = eff.source;
+        if (eff.cost != null) {
+          correctedUnitPrice = eff.cost * cf;
+          correctedTotal = correctedUnitPrice * (l.qty_entered || 0);
+        }
+        sumOld += l.total_amount || 0;
+        sumNew += (correctedTotal != null ? correctedTotal : (l.total_amount || 0));
+        if (source === 'barcode') nMatchedBarcode++;
+        else if (source === 'manual_match' || source === 'manual_cost') nManual++;
+        else {
+          nUnresolved++;
+          const s = state.skyItems.find((x) => x.item_code === l.item_code);
+          unresolvedMap.set(l.item_code, s ? s.name : l.trade_name);
+        }
+
+        correctedRows.push({
+          'رقم الوثيقة': l.doc_no,
+          'الفرع': l.branch,
+          'كود المادة': l.item_code,
+          'الاسم التجاري': l.trade_name,
+          'الوحدة': l.unit,
+          'الوحدة الأساسية': l.base_unit,
+          'معامل التحويل': cf,
+          'الكمية المدخلة': l.qty_entered,
+          'سعر الوحدة (القديم)': l.unit_price,
+          'المبلغ الإجمالي (القديم)': l.total_amount,
+          'التكلفة الصحيحة لكل وحدة أساسية': eff.cost,
+          'سعر الوحدة (المصحح)': correctedUnitPrice,
+          'المبلغ الإجمالي (المصحح)': correctedTotal,
+          'الفرق': correctedTotal != null ? Math.round((correctedTotal - (l.total_amount || 0)) * 100) / 100 : null,
+          'مصدر التكلفة': source === 'barcode' ? 'مطابقة باركود تلقائية' : source === 'manual_match' ? 'مطابقة يدوية مؤكدة' : source === 'manual_cost' ? 'تكلفة يدوية' : source === 'no_match' ? 'بلا تطابق - بحاجة تسعير يدوي' : 'غير محلول',
+          'باركود مادة البيان المطابقة': eff.albayan ? eff.albayan.barcode_raw : '',
+          'اسم مادة البيان المطابقة': eff.albayan ? eff.albayan.name : '',
+          'رقم الوجبة': l.batch,
+          'تاريخ الصلاحية': l.expiry,
+        });
+      }
+
+      const unresolvedRows = Array.from(unresolvedMap.entries()).map(([code, name]) => ({ 'كود المادة': code, 'الاسم التجاري': name }));
+
+      const summaryRows = [
+        { 'البيان': 'إجمالي أسطر الإدخال', 'القيمة': lines.length },
+        { 'البيان': 'أسطر مطابقة تلقائياً بالباركود', 'القيمة': nMatchedBarcode },
+        { 'البيان': 'أسطر تمت مطابقتها/تسعيرها يدوياً', 'القيمة': nManual },
+        { 'البيان': 'أسطر بدون تصحيح (غير محلولة)', 'القيمة': nUnresolved },
+        { 'البيان': 'إجمالي القيمة القديمة (الخاطئة)', 'القيمة': Math.round(sumOld) },
+        { 'البيان': 'إجمالي القيمة بعد التصحيح', 'القيمة': Math.round(sumNew) },
+        { 'البيان': 'الفرق الإجمالي', 'القيمة': Math.round(sumNew - sumOld) },
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(correctedRows), 'تصحيح الكلفة');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(unresolvedRows), 'غير محلول');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'ملخص');
+
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+
+      const fname = 'تصحيح-كلفة-بضاعة-اول-المدة-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      if (state.downloads) {
+        const r = await state.downloads.save({ filename: fname, data: blob });
+        toast(r.status === 'saved' ? 'تم حفظ الملف' : 'تم تسليم الملف');
+      } else {
+        toast('تعذّر الوصول لخدمة التنزيل في هذا العرض');
+      }
+    } catch (e) {
+      console.error(e);
+      toast('حدث خطأ أثناء إنشاء الملف');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
+  // ---------------- init ----------------
+
+  async function init() {
+    try {
+      const [albayan, skyItems, matches] = await Promise.all([
+        fetch('data/albayan.json').then((r) => r.json()),
+        fetch('data/sky_items.json').then((r) => r.json()),
+        fetch('data/matches.json').then((r) => r.json()),
+      ]);
+      state.albayan = albayan;
+      state.skyItems = skyItems;
+      state.matches = matches;
+    } catch (e) {
+      $('#loading').innerHTML = '<p>تعذّر تحميل بيانات المطابقة. حدّث الصفحة وحاول مجدداً.</p>';
+      console.error(e);
+      return;
+    }
+
+    try {
+      if (window.claude && typeof window.claude.use === 'function') {
+        state.db = await window.claude.use('db');
+        state.downloads = await window.claude.use('downloads');
+      }
+    } catch (e) { console.warn('capabilities unavailable', e); }
+
+    if (state.db) await loadReviews();
+
+    $('#loading').hidden = true;
+    $('#appShell').hidden = false;
+
+    renderAll();
+    wireControls();
+  }
+
+  function wireControls() {
+    $$('.stat-tile').forEach((t) => t.addEventListener('click', () => {
+      state.filter = t.dataset.filter;
+      state.page = 1;
+      renderAll();
+    }));
+    $('#searchBox').addEventListener('input', (e) => { state.search = e.target.value; state.page = 1; renderList(); });
+    $('#branchSelect').addEventListener('change', (e) => { state.branch = e.target.value; state.page = 1; renderList(); });
+    $('#prevPage').addEventListener('click', () => { state.page--; renderList(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    $('#nextPage').addEventListener('click', () => { state.page++; renderList(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    $('#exportBtn').addEventListener('click', exportExcel);
+    $('#closeModal').addEventListener('click', closeModal);
+    $('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeModal(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();

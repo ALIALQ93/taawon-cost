@@ -81,6 +81,53 @@ body {
 
 .app { max-width: 1180px; margin: 0 auto; padding: 20px 20px 60px; }
 
+/* ---------- login ---------- */
+.login-screen {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px;
+}
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 24px;
+  box-shadow: var(--shadow);
+}
+.login-card h1 { margin: 0 0 6px; font-size: 20px; font-weight: 800; }
+.login-sub { margin: 0 0 18px; color: var(--ink-dim); font-size: 13.5px; line-height: 1.55; }
+.login-card label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  margin-bottom: 12px;
+}
+.login-card input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+}
+.login-error {
+  margin: 12px 0 0;
+  color: var(--bad);
+  background: var(--bad-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
 /* ---------- header ---------- */
 .hero {
   background: linear-gradient(155deg, var(--accent) 0%, #0a5747 100%);
@@ -90,8 +137,41 @@ body {
   box-shadow: var(--shadow);
   margin-bottom: 18px;
 }
+.hero-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
 .hero h1 { margin: 0 0 4px; font-size: 22px; font-weight: 800; text-wrap: balance; }
 .hero p { margin: 0; opacity: .88; font-size: 13.5px; max-width: 62ch; line-height: 1.6; }
+.user-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.user-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 13px; }
+.role-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.28);
+}
+.role-badge[data-role="admin"] { background: rgba(255,255,255,.32); }
+.hero-btn {
+  background: rgba(255,255,255,.14) !important;
+  color: var(--accent-ink) !important;
+  border-color: rgba(255,255,255,.28) !important;
+}
+@media (max-width: 700px) {
+  .hero-top { flex-direction: column; }
+  .user-bar { align-items: flex-start; }
+  .user-meta { align-items: flex-start; }
+}
 
 .stat-row {
   display: grid;

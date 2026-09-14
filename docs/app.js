@@ -2,23 +2,37 @@
   'use strict';
 
   const PAGE_SIZE = 40;
-  const STORAGE_KEY = 'taawon_cost_reviews_v1';
+  const ROLE_LABELS = { viewer: 'مشاهد', reviewer: 'مراجع', admin: 'مسؤول' };
 
   const state = {
-    albayan: [],          // array, index === idx
-    skyItems: [],          // array
-    matches: {},           // item_code -> match info
-    reviews: {},           // item_code -> {status, albayan_idx, cost_override, ts}
+    albayan: [],
+    skyItems: [],
+    matches: {},
+    reviews: {},
     filter: 'all',
     search: '',
     branch: '',
     page: 1,
     activeCode: null,
     modalSearch: '',
+    user: null,
+    profile: null,
+    sessionReady: false,
   };
+
+  let supabase = null;
+  let controlsWired = false;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  function role() {
+    return (state.profile && state.profile.role) || 'viewer';
+  }
+  function isAdmin() { return role() === 'admin'; }
+  function canReview() { return role() === 'reviewer' || role() === 'admin'; }
+  function canSeeCost() { return isAdmin(); }
+  function canExport() { return isAdmin(); }
 
   function fmtNum(n) {
     if (n === null || n === undefined || Number.isNaN(n)) return '—';
@@ -112,6 +126,13 @@
   }
 
   function costCellHtml(s) {
+    if (!canSeeCost()) {
+      const st = statusOf(s.item_code);
+      if (st === 'matched' || st === 'confirmed') {
+        return `<div class="cost-cell"><span class="pending">محجوبة — للمسؤول فقط</span></div>`;
+      }
+      return `<div class="cost-cell"><span class="pending">—</span></div>`;
+    }
     const eff = effective(s.item_code);
     if (eff.source === 'unresolved') return `<div class="cost-cell"><span class="pending">لم تُحسب بعد</span></div>`;
     if (eff.source === 'no_match') return `<div class="cost-cell"><span class="pending">بلا تكلفة مرجعية</span></div>`;
@@ -124,6 +145,15 @@
 
   function dominantUnitLabel(s) {
     return (s.base_units && s.base_units[0]) || (s.units && s.units[0]) || 'وحدة';
+  }
+
+  function renderUserBar() {
+    const name = (state.profile && state.profile.full_name) || (state.user && state.user.email) || '—';
+    $('#userName').textContent = name;
+    const badge = $('#userRoleBadge');
+    badge.textContent = ROLE_LABELS[role()] || role();
+    badge.dataset.role = role();
+    $('#exportBtn').hidden = !canExport();
   }
 
   function renderStats() {
@@ -182,6 +212,7 @@
   }
 
   function renderAll() {
+    renderUserBar();
     renderStats();
     renderBranchOptions();
     renderList();
@@ -193,10 +224,21 @@
 
   // ---------------- modal ----------------
 
+  function candidateCostMeta(a) {
+    if (!canSeeCost()) {
+      return `الوحدة: ${escapeHtml(a.base_unit || '—')}`;
+    }
+    return `الوحدة: ${escapeHtml(a.base_unit || '—')} · التكلفة لكل ${escapeHtml(a.base_unit || 'وحدة')}:
+      ${a.cost != null ? fmtNum(a.cost) + ' د.ع (' + (costSourceLabel(a.cost_source) || 'بدون مصدر') + ')' : 'غير متوفرة بالبيان القديم'}`;
+  }
+
   function candidateCardHtml(cand, chosenIdx, scoreLabel) {
     const a = state.albayan[cand.albayan_idx];
     if (!a) return '';
     const chosen = chosenIdx === cand.albayan_idx;
+    const actionBtn = canReview()
+      ? `<button class="btn ${chosen ? 'primary' : ''}" data-action="confirm-cand" data-idx="${cand.albayan_idx}">${chosen ? '✓ مُعتمدة' : 'اعتماد هذه المطابقة'}</button>`
+      : (chosen ? `<span class="chip confirmed">✓ مُعتمدة</span>` : '');
     return `
       <div class="candidate ${chosen ? 'chosen' : ''}" data-idx="${cand.albayan_idx}">
         <div>
@@ -204,13 +246,12 @@
           <div class="cand-meta">
             ${a.foreign_name ? escapeHtml(a.foreign_name) + ' · ' : ''}${a.scientific_name ? escapeHtml(a.scientific_name) + ' · ' : ''}
             ${a.barcode ? 'باركود ' + a.barcode + ' · ' : ''}
-            الوحدة: ${escapeHtml(a.base_unit || '—')} · التكلفة لكل ${escapeHtml(a.base_unit || 'وحدة')}:
-            ${a.cost != null ? fmtNum(a.cost) + ' د.ع (' + (costSourceLabel(a.cost_source) || 'بدون مصدر') + ')' : 'غير متوفرة بالبيان القديم'}
+            ${candidateCostMeta(a)}
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
           ${scoreLabel ? `<span class="cand-score">${scoreLabel}</span>` : ''}
-          <button class="btn ${chosen ? 'primary' : ''}" data-action="confirm-cand" data-idx="${cand.albayan_idx}">${chosen ? '✓ مُعتمدة' : 'اعتماد هذه المطابقة'}</button>
+          ${actionBtn}
         </div>
       </div>`;
   }
@@ -220,8 +261,7 @@
     state.modalSearch = '';
     const s = state.skyItems.find((x) => x.item_code === code);
     if (!s) return;
-    const overlay = $('#overlay');
-    overlay.hidden = false;
+    $('#overlay').hidden = false;
     renderModal();
   }
 
@@ -262,29 +302,39 @@
       body += `</div>`;
     }
 
-    body += `<div>
-      <div class="section-title">بحث يدوي في ملف البيان القديم</div>
-      <input type="search" id="modalSearchBox" placeholder="ابحث بالاسم أو الباركود..." style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:inherit;">
-      <div class="search-results" id="modalSearchResults" style="margin-top:8px;"></div>
-    </div>`;
+    if (canReview()) {
+      body += `<div>
+        <div class="section-title">بحث يدوي في ملف البيان القديم</div>
+        <input type="search" id="modalSearchBox" placeholder="ابحث بالاسم أو الباركود..." style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:inherit;">
+        <div class="search-results" id="modalSearchResults" style="margin-top:8px;"></div>
+      </div>`;
+    }
 
-    body += `<div>
-      <div class="section-title">أو أدخل تكلفة يدوياً (إن لم توجد مادة مطابقة في البيان)</div>
-      <div class="manual-cost">
-        <input type="number" id="manualCostInput" placeholder="التكلفة لكل ${escapeHtml(dominantUnitLabel(s))}" value="${rev && rev.status === 'manual_cost' ? rev.cost_override : ''}">
-        <button class="btn" data-action="save-manual-cost">حفظ كتكلفة يدوية</button>
-      </div>
-    </div>`;
+    if (isAdmin()) {
+      body += `<div>
+        <div class="section-title">أو أدخل تكلفة يدوياً (إن لم توجد مادة مطابقة في البيان)</div>
+        <div class="manual-cost">
+          <input type="number" id="manualCostInput" placeholder="التكلفة لكل ${escapeHtml(dominantUnitLabel(s))}" value="${rev && rev.status === 'manual_cost' ? rev.cost_override : ''}">
+          <button class="btn" data-action="save-manual-cost">حفظ كتكلفة يدوية</button>
+        </div>
+      </div>`;
+    } else if (rev && rev.status === 'manual_cost') {
+      body += `<div class="footnote">هذه المادة لها تكلفة يدوية أدخلها المسؤول (القيمة محجوبة).</div>`;
+    }
 
-    body += `<div style="display:flex; gap:8px;">
-      <button class="btn" data-action="mark-no-match" style="flex:1;">${rev && rev.status === 'no_match' ? '✓ مُعلّمة: بلا تطابق' : 'تعليم: بلا تطابق (بحاجة تسعير يدوي لاحقاً في Sky)'}</button>
-      ${rev ? `<button class="btn ghost" data-action="clear-review">مسح المراجعة</button>` : ''}
-    </div>`;
+    if (canReview()) {
+      body += `<div style="display:flex; gap:8px;">
+        <button class="btn" data-action="mark-no-match" style="flex:1;">${rev && rev.status === 'no_match' ? '✓ مُعلّمة: بلا تطابق' : 'تعليم: بلا تطابق (بحاجة تسعير يدوي لاحقاً في Sky)'}</button>
+        ${rev ? `<button class="btn ghost" data-action="clear-review">مسح المراجعة</button>` : ''}
+      </div>`;
+    } else {
+      body += `<div class="footnote">حسابك للعرض فقط — المراجعة والتصدير حسب الصلاحية.</div>`;
+    }
 
     $('#modalBody').innerHTML = body;
 
     $$('[data-action="confirm-cand"]', $('#modalBody')).forEach((btn) => {
-      btn.addEventListener('click', () => saveReview(code, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null, ts: Date.now() }));
+      btn.addEventListener('click', () => saveReview(code, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null }));
     });
     const searchBox = $('#modalSearchBox');
     if (searchBox) {
@@ -297,10 +347,10 @@
     if (manualBtn) manualBtn.addEventListener('click', () => {
       const val = parseFloat($('#manualCostInput').value);
       if (!val || val <= 0) { toast('أدخل رقماً صحيحاً أكبر من صفر'); return; }
-      saveReview(code, { status: 'manual_cost', albayan_idx: null, cost_override: val, ts: Date.now() });
+      saveReview(code, { status: 'manual_cost', albayan_idx: null, cost_override: val });
     });
     const noMatchBtn = $('[data-action="mark-no-match"]', $('#modalBody'));
-    if (noMatchBtn) noMatchBtn.addEventListener('click', () => saveReview(code, { status: 'no_match', albayan_idx: null, cost_override: null, ts: Date.now() }));
+    if (noMatchBtn) noMatchBtn.addEventListener('click', () => saveReview(code, { status: 'no_match', albayan_idx: null, cost_override: null }));
     const clearBtn = $('[data-action="clear-review"]', $('#modalBody'));
     if (clearBtn) clearBtn.addEventListener('click', () => clearReview(code));
 
@@ -324,46 +374,130 @@
     if (!results.length) { box.innerHTML = `<div style="padding:10px;font-size:12.5px;color:var(--ink-dim);">لا نتائج</div>`; return; }
     box.innerHTML = results.map((a) => candidateCardHtml({ albayan_idx: a.idx }, rev && rev.albayan_idx, null)).join('');
     $$('[data-action="confirm-cand"]', box).forEach((btn) => {
-      btn.addEventListener('click', () => saveReview(state.activeCode, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null, ts: Date.now() }));
+      btn.addEventListener('click', () => saveReview(state.activeCode, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null }));
     });
   }
 
-  // ---------------- local persistence (localStorage) ----------------
-  // Reviews are saved only in this browser/device. Export the Excel file
-  // regularly if you review from more than one computer.
+  // ---------------- auth + supabase ----------------
 
-  function loadReviews() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      state.reviews = raw ? JSON.parse(raw) : {};
-    } catch (e) {
-      console.warn('loadReviews failed', e);
-      state.reviews = {};
+  function getConfig() {
+    const cfg = window.TAAWON_CONFIG || {};
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey || cfg.supabaseUrl.includes('YOUR_PROJECT')) {
+      return null;
     }
+    return cfg;
   }
 
-  function persistReviews() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.reviews));
-      return true;
-    } catch (e) {
-      console.warn('persistReviews failed', e);
+  function initSupabase() {
+    const cfg = getConfig();
+    if (!cfg) {
+      $('#loginScreen').hidden = false;
+      $('#loginScreen .login-card').innerHTML = `
+        <h1>إعداد مطلوب</h1>
+        <p class="login-sub">انسخ <code>docs/config.example.js</code> إلى <code>docs/config.js</code> واملأ رابط مشروع Supabase ومفتاح anon، ثم نفّذ <code>supabase/schema.sql</code>.</p>`;
       return false;
     }
+    supabase = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+      auth: { persistSession: true, autoRefreshToken: true },
+    });
+    return true;
   }
 
-  function saveReview(code, entry) {
-    state.reviews[code] = entry;
+  async function loadProfile(userId) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, role')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      // trigger may lag; insert fallback as viewer
+      const { data: inserted, error: insErr } = await supabase
+        .from('profiles')
+        .insert({ id: userId, full_name: state.user.email, role: 'viewer' })
+        .select('id, full_name, role')
+        .single();
+      if (insErr) throw insErr;
+      return inserted;
+    }
+    return data;
+  }
+
+  function stripCostsInMemory() {
+    if (canSeeCost()) return;
+    for (const a of state.albayan) {
+      if (a && 'cost' in a) a.cost = null;
+      if (a && 'cost_source' in a) a.cost_source = null;
+    }
+    for (const code of Object.keys(state.reviews)) {
+      const r = state.reviews[code];
+      if (r) r.cost_override = null;
+    }
+  }
+
+  async function loadReviewsFromCloud() {
+    const { data, error } = await supabase
+      .from('reviews_visible')
+      .select('item_code, status, albayan_idx, cost_override, updated_at');
+    if (error) throw error;
+    const map = {};
+    for (const row of data || []) {
+      map[row.item_code] = {
+        status: row.status,
+        albayan_idx: row.albayan_idx,
+        cost_override: row.cost_override,
+        ts: row.updated_at ? Date.parse(row.updated_at) : Date.now(),
+      };
+    }
+    state.reviews = map;
+  }
+
+  async function saveReview(code, entry) {
+    if (!canReview()) { toast('ليس لديك صلاحية المراجعة'); return; }
+    if (entry.status === 'manual_cost' && !isAdmin()) {
+      toast('التكلفة اليدوية للمسؤول فقط');
+      return;
+    }
+
+    const payload = {
+      item_code: code,
+      status: entry.status,
+      albayan_idx: entry.albayan_idx,
+      cost_override: entry.cost_override,
+      reviewed_by: state.user.id,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from('reviews').upsert(payload, { onConflict: 'item_code' });
+    if (error) {
+      console.error(error);
+      toast('تعذّر الحفظ: ' + (error.message || 'خطأ'));
+      return;
+    }
+
+    state.reviews[code] = {
+      status: entry.status,
+      albayan_idx: entry.albayan_idx,
+      cost_override: canSeeCost() ? entry.cost_override : null,
+      ts: Date.now(),
+    };
     renderAll();
     renderModal();
-    toast(persistReviews() ? 'تم الحفظ على هذا الجهاز' : 'تعذّر الحفظ محلياً (تحقق من إعدادات المتصفح)');
+    toast('تم الحفظ أونلاين');
   }
 
-  function clearReview(code) {
+  async function clearReview(code) {
+    if (!canReview()) { toast('ليس لديك صلاحية'); return; }
+    const { error } = await supabase.from('reviews').delete().eq('item_code', code);
+    if (error) {
+      console.error(error);
+      toast('تعذّر المسح');
+      return;
+    }
     delete state.reviews[code];
     renderAll();
     renderModal();
-    persistReviews();
+    toast('تم مسح المراجعة');
   }
 
   function toast(msg) {
@@ -377,6 +511,7 @@
   // ---------------- export ----------------
 
   async function exportExcel() {
+    if (!canExport()) { toast('التصدير للمسؤول فقط'); return; }
     const btn = $('#exportBtn');
     btn.disabled = true;
     const originalText = btn.textContent;
@@ -385,8 +520,7 @@
       const res = await fetch('data/sky_lines.json');
       const lines = await res.json();
 
-      // dominant base unit per item (most frequent across its lines)
-      const baseUnitCounts = new Map(); // item_code -> Map(unit -> count)
+      const baseUnitCounts = new Map();
       for (const l of lines) {
         if (!l.base_unit) continue;
         if (!baseUnitCounts.has(l.item_code)) baseUnitCounts.set(l.item_code, new Map());
@@ -487,34 +621,106 @@
     }
   }
 
-  // ---------------- init ----------------
+  // ---------------- session UI ----------------
 
-  async function init() {
-    try {
-      const [albayan, skyItems, matches] = await Promise.all([
-        fetch('data/albayan.json').then((r) => r.json()),
-        fetch('data/sky_items.json').then((r) => r.json()),
-        fetch('data/matches.json').then((r) => r.json()),
-      ]);
-      state.albayan = albayan;
-      state.skyItems = skyItems;
-      state.matches = matches;
-    } catch (e) {
-      $('#loading').innerHTML = '<p>تعذّر تحميل بيانات المطابقة. حدّث الصفحة وحاول مجدداً.</p>';
-      console.error(e);
-      return;
-    }
-
-    loadReviews();
-
+  function showLogin() {
+    $('#loginScreen').hidden = false;
+    $('#appRoot').hidden = true;
     $('#loading').hidden = true;
-    $('#appShell').hidden = false;
+    $('#appShell').hidden = true;
+  }
 
-    renderAll();
-    wireControls();
+  function showAppShellLoading() {
+    $('#loginScreen').hidden = true;
+    $('#appRoot').hidden = false;
+    $('#loading').hidden = false;
+    $('#appShell').hidden = true;
+  }
+
+  let appLoadSeq = 0;
+
+  async function onSignedIn(session) {
+    const seq = ++appLoadSeq;
+    state.user = session.user;
+    showAppShellLoading();
+    try {
+      state.profile = await loadProfile(session.user.id);
+      if (seq !== appLoadSeq) return;
+      await loadAppData();
+      if (seq !== appLoadSeq) return;
+      await loadReviewsFromCloud();
+      if (seq !== appLoadSeq) return;
+      stripCostsInMemory();
+      $('#loading').hidden = true;
+      $('#appShell').hidden = false;
+      renderAll();
+      wireControls();
+    } catch (e) {
+      if (seq !== appLoadSeq) return;
+      console.error(e);
+      $('#loading').innerHTML = '<p>تعذّر تحميل البيانات أو الصلاحيات. حدّث الصفحة أو راجع إعدادات Supabase.</p>';
+    }
+  }
+
+  async function loadAppData() {
+    const [albayan, skyItems, matches] = await Promise.all([
+      fetch('data/albayan.json').then((r) => {
+        if (!r.ok) throw new Error('albayan.json missing');
+        return r.json();
+      }),
+      fetch('data/sky_items.json').then((r) => {
+        if (!r.ok) throw new Error('sky_items.json missing');
+        return r.json();
+      }),
+      fetch('data/matches.json').then((r) => {
+        if (!r.ok) throw new Error('matches.json missing');
+        return r.json();
+      }),
+    ]);
+    state.albayan = albayan;
+    state.skyItems = skyItems;
+    state.matches = matches;
+  }
+
+  async function onSignedOut() {
+    state.user = null;
+    state.profile = null;
+    state.reviews = {};
+    state.albayan = [];
+    state.skyItems = [];
+    state.matches = {};
+    showLogin();
+  }
+
+  function wireAuthUi() {
+    $('#loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = $('#loginError');
+      errEl.hidden = true;
+      const btn = $('#loginBtn');
+      btn.disabled = true;
+      btn.textContent = 'جارِ الدخول…';
+      try {
+        const email = $('#loginEmail').value.trim();
+        const password = $('#loginPassword').value;
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } catch (err) {
+        errEl.textContent = err.message || 'فشل تسجيل الدخول';
+        errEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'دخول';
+      }
+    });
+    $('#logoutBtn').addEventListener('click', async () => {
+      await supabase.auth.signOut();
+    });
   }
 
   function wireControls() {
+    if (controlsWired) return;
+    controlsWired = true;
     $$('.stat-tile').forEach((t) => t.addEventListener('click', () => {
       state.filter = t.dataset.filter;
       state.page = 1;
@@ -530,5 +736,16 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  async function boot() {
+    if (!initSupabase()) return;
+    wireAuthUi();
+
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'TOKEN_REFRESHED') return;
+      if (session) await onSignedIn(session);
+      else await onSignedOut();
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', boot);
 })();

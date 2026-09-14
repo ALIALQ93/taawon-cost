@@ -1,53 +1,84 @@
+<!DOCTYPE html>
 <meta charset="UTF-8">
 <title>مطابقة تكلفة المخزون</title>
 <link rel="stylesheet" href="styles.css">
 
 <div class="app" dir="rtl" lang="ar">
 
-  <div class="hero">
-    <h1>مطابقة تكلفة بضاعة أول المدة — من البيان إلى Sky</h1>
-    <p>
-      تطابق هذه الأداة مواد جرد بداية المدة في Sky مع كلفتها الحقيقية من ملف البيان القديم
-      (بالباركود أولاً، ثم مراجعة يدوية لما تبقّى)، وتحوّل التكلفة عبر معامل التحويل الخاص بكل سطر،
-      ثم تصدّر ملف Excel جاهزاً للمراجعة والاستيراد.
-    </p>
-    <div class="stat-row">
-      <div class="stat-tile active" id="statAll" data-filter="all"><span class="num">0</span><span class="lbl">كل المواد</span></div>
-      <div class="stat-tile" id="statMatched" data-filter="matched"><span class="num">0</span><span class="lbl">مطابقة بالباركود</span></div>
-      <div class="stat-tile" id="statReview" data-filter="review"><span class="num">0</span><span class="lbl">بحاجة مراجعة</span></div>
-      <div class="stat-tile" id="statNone" data-filter="none"><span class="num">0</span><span class="lbl">بدون تطابق</span></div>
-      <div class="stat-tile" id="statConfirmed" data-filter="reviewed"><span class="num">0</span><span class="lbl">روجعت يدوياً</span></div>
+  <div id="loginScreen" class="login-screen" hidden>
+    <div class="login-card">
+      <h1>مطابقة تكلفة المخزون</h1>
+      <p class="login-sub">سجّل الدخول للمتابعة — التكلفة ظاهرة للمسؤول فقط</p>
+      <form id="loginForm">
+        <label>
+          البريد الإلكتروني
+          <input type="email" id="loginEmail" required autocomplete="username" dir="ltr">
+        </label>
+        <label>
+          كلمة المرور
+          <input type="password" id="loginPassword" required autocomplete="current-password" dir="ltr">
+        </label>
+        <button type="submit" class="btn primary" id="loginBtn" style="width:100%">دخول</button>
+        <p id="loginError" class="login-error" hidden></p>
+      </form>
     </div>
   </div>
 
-  <div id="loading" class="loading-screen">
-    <div>جارِ تحميل بيانات البيان القديم وSky…</div>
-  </div>
-
-  <div id="appShell" hidden>
-    <div class="controls">
-      <input type="search" id="searchBox" placeholder="ابحث بالاسم أو كود المادة...">
-      <select id="branchSelect">
-        <option value="">كل الفروع</option>
-      </select>
-      <span class="spacer"></span>
-      <button class="btn primary" id="exportBtn">تصدير ملف Excel</button>
+  <div id="appRoot" hidden>
+    <div class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>مطابقة تكلفة بضاعة أول المدة — من البيان إلى Sky</h1>
+          <p>
+            تطابق هذه الأداة مواد جرد بداية المدة في Sky مع كلفتها الحقيقية من ملف البيان القديم
+            (بالباركود أولاً، ثم مراجعة يدوية لما تبقّى)، وتحوّل التكلفة عبر معامل التحويل الخاص بكل سطر،
+            ثم تصدّر ملف Excel جاهزاً للمراجعة والاستيراد.
+          </p>
+        </div>
+        <div class="user-bar">
+          <div class="user-meta">
+            <span id="userName">—</span>
+            <span class="role-badge" id="userRoleBadge">—</span>
+          </div>
+          <button class="btn ghost hero-btn" id="logoutBtn" type="button">خروج</button>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-tile active" id="statAll" data-filter="all"><span class="num">0</span><span class="lbl">كل المواد</span></div>
+        <div class="stat-tile" id="statMatched" data-filter="matched"><span class="num">0</span><span class="lbl">مطابقة بالباركود</span></div>
+        <div class="stat-tile" id="statReview" data-filter="review"><span class="num">0</span><span class="lbl">بحاجة مراجعة</span></div>
+        <div class="stat-tile" id="statNone" data-filter="none"><span class="num">0</span><span class="lbl">بدون تطابق</span></div>
+        <div class="stat-tile" id="statConfirmed" data-filter="reviewed"><span class="num">0</span><span class="lbl">روجعت يدوياً</span></div>
+      </div>
     </div>
 
-    <div class="list" id="list"></div>
-
-    <div class="pager">
-      <button class="btn" id="prevPage">السابق</button>
-      <span id="pagerInfo"></span>
-      <button class="btn" id="nextPage">التالي</button>
+    <div id="loading" class="loading-screen">
+      <div>جارِ تحميل بيانات البيان القديم وSky…</div>
     </div>
 
-    <div class="footnote" style="margin-top:20px;">
-      ملاحظتان: (1) ورقة "price_list" بملف التصدير جاهزة للاستيراد المباشر بSky بنفس أعمدة قالبكم
-      (code, currency_name, unit_name, price...) وتحوي فقط المواد اللي عندها تكلفة محسومة — عمود
-      price_list_name متروك فاضي لتحدّده انت بعد التصدير. المواد بدون تكلفة بعد موجودة بورقة "غير محلول" منفصلة.
-      (2) المراجعات اليدوية تُحفظ في متصفح هذا الجهاز فقط (localStorage) — إذا راجعت من جهاز آخر ستبدأ من جديد،
-      فاحرص على تصدير ملف Excel بعد كل جلسة مراجعة لحفظ التقدّم.
+    <div id="appShell" hidden>
+      <div class="controls">
+        <input type="search" id="searchBox" placeholder="ابحث بالاسم أو كود المادة...">
+        <select id="branchSelect">
+          <option value="">كل الفروع</option>
+        </select>
+        <span class="spacer"></span>
+        <button class="btn primary" id="exportBtn" hidden>تصدير ملف Excel</button>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="pager">
+        <button class="btn" id="prevPage">السابق</button>
+        <span id="pagerInfo"></span>
+        <button class="btn" id="nextPage">التالي</button>
+      </div>
+
+      <div class="footnote" style="margin-top:20px;">
+        ملاحظتان: (1) ورقة "Prices" بملف التصدير جاهزة للاستيراد المباشر بSky — ظاهرة للمسؤول فقط.
+        (2) المراجعات تُحفظ أونلاين على Supabase ويشاركها الفريق حسب الدور:
+        مشاهد / مراجع / مسؤول (التكلفة للمسؤول فقط).
+      </div>
     </div>
   </div>
 
@@ -66,5 +97,7 @@
 
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
 <script src="app.js"></script>

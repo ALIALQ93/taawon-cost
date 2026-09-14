@@ -60,9 +60,9 @@ npx --yes serve docs
 1. ارفع المستودع إلى GitHub
 2. Import في Vercel
 3. في شاشة الإعداد غيّر التالي:
-   - **Root Directory** → `docs` (اضغط Edit بجانب `./`)
+   - **Root Directory** → `docs`
    - **Build Command** → `npm run build`
-   - **Output Directory** → اتركه فارغاً أو `.`
+   - **Output Directory** → `public`
    - **Install Command** → `npm install` (أو الافتراضي)
 4. Environment Variables (Production + Preview):
    - `SUPABASE_URL`

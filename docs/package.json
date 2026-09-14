@@ -1,0 +1,7 @@
+{
+  "name": "taawon-cost",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/write-config.js"
+  }
+}

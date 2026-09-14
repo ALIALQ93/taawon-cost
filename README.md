@@ -59,10 +59,18 @@ npx --yes serve docs
 ### 4) النشر على Vercel (مجاني)
 1. ارفع المستودع إلى GitHub
 2. Import في Vercel
-3. **Root Directory** = `docs` (يُقرأ أيضاً `docs/vercel.json`)
-4. أضف `config.js` داخل `docs` على السيرفر (الملف محلي/gitignored) عبر:
-   - رفعه يدوياً في بيئة النشر، أو
-   - Environment Variables + أمر بناء بسيط يولّد الملف
+3. في شاشة الإعداد غيّر التالي:
+   - **Root Directory** → `docs` (اضغط Edit بجانب `./`)
+   - **Build Command** → `npm run build`
+   - **Output Directory** → اتركه فارغاً أو `.`
+   - **Install Command** → `npm install` (أو الافتراضي)
+4. Environment Variables (Production + Preview):
+   - `SUPABASE_URL`
+   - `SUPABASE_PUBLISHABLE_KEY`
+   - لا تضف `SUPABASE_SECRET_KEY` هنا
+5. Deploy
+
+أمر البناء يولّد `config.js` من متغيرات البيئة تلقائياً.
 
 ## ملاحظات أمان (مهمة)
 - مفتاح **anon** مصمَّم ليكون عاماً؛ الحماية الحقيقية عبر **RLS** في Supabase.

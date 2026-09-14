@@ -624,13 +624,19 @@
   // ---------------- session UI ----------------
 
   function showLogin() {
+    document.body.classList.add('is-login');
+    document.body.classList.remove('is-app');
     $('#loginScreen').hidden = false;
     $('#appRoot').hidden = true;
     $('#loading').hidden = true;
     $('#appShell').hidden = true;
+    const overlay = $('#overlay');
+    if (overlay) overlay.hidden = true;
   }
 
   function showAppShellLoading() {
+    document.body.classList.remove('is-login');
+    document.body.classList.add('is-app');
     $('#loginScreen').hidden = true;
     $('#appRoot').hidden = false;
     $('#loading').hidden = false;

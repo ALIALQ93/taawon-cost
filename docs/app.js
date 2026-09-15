@@ -303,10 +303,10 @@
     }
 
     if (canReview()) {
-      body += `<div>
+      body += `<div class="modal-search-wrap">
         <div class="section-title">بحث يدوي في ملف البيان القديم</div>
-        <input type="search" id="modalSearchBox" placeholder="ابحث بالاسم أو الباركود..." style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:inherit;">
-        <div class="search-results" id="modalSearchResults" style="margin-top:8px;"></div>
+        <input type="search" id="modalSearchBox" placeholder="ابحث بالاسم أو الباركود...">
+        <div class="search-results" id="modalSearchResults"></div>
       </div>`;
     }
 
@@ -371,7 +371,10 @@
         if (results.length >= 25) break;
       }
     }
-    if (!results.length) { box.innerHTML = `<div style="padding:10px;font-size:12.5px;color:var(--ink-dim);">لا نتائج</div>`; return; }
+    if (!results.length) {
+      box.innerHTML = `<div class="search-empty">لا نتائج</div>`;
+      return;
+    }
     box.innerHTML = results.map((a) => candidateCardHtml({ albayan_idx: a.idx }, rev && rev.albayan_idx, null)).join('');
     $$('[data-action="confirm-cand"]', box).forEach((btn) => {
       btn.addEventListener('click', () => saveReview(state.activeCode, { status: 'confirmed', albayan_idx: Number(btn.dataset.idx), cost_override: null }));

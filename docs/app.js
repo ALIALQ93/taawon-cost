@@ -75,13 +75,17 @@
   }
 
   function counts() {
-    const c = { all: state.skyItems.length, matched: 0, review: 0, none: 0, confirmed: 0 };
+    const c = { all: state.skyItems.length, matched: 0, review: 0, none: 0, confirmed: 0, duplicate: 0 };
     for (const s of state.skyItems) {
       const st = statusOf(s.item_code);
       if (st === 'matched') c.matched++;
       else if (st === 'review') c.review++;
       else if (st === 'none') c.none++;
-      if (state.reviews[s.item_code]) c.confirmed++;
+      const rev = state.reviews[s.item_code];
+      if (rev) {
+        c.confirmed++;
+        if (rev.status === 'duplicate_def') c.duplicate++;
+      }
     }
     return c;
   }
@@ -97,7 +101,9 @@
     if (state.filter !== 'all') {
       arr = arr.filter((s) => {
         const st = statusOf(s.item_code);
-        if (state.filter === 'reviewed') return !!state.reviews[s.item_code];
+        const rev = state.reviews[s.item_code];
+        if (state.filter === 'reviewed') return !!rev;
+        if (state.filter === 'duplicate') return !!(rev && rev.status === 'duplicate_def');
         return st === state.filter;
       });
     }
@@ -171,7 +177,10 @@
     $('#statReview .num').textContent = fmtNum(c.review);
     $('#statNone .num').textContent = fmtNum(c.none);
     $('#statConfirmed .num').textContent = fmtNum(c.confirmed);
+    $('#statDuplicate .num').textContent = fmtNum(c.duplicate);
     $$('.stat-tile').forEach((t) => t.classList.toggle('active', t.dataset.filter === state.filter));
+    const statusSel = $('#statusSelect');
+    if (statusSel && statusSel.value !== state.filter) statusSel.value = state.filter;
   }
 
   function renderBranchOptions() {
@@ -553,12 +562,24 @@
         return Array.from(m.entries()).sort((a, b) => b[1] - a[1])[0][0];
       }
 
+      const exportItems = filteredItems();
+      const filterLabels = [];
+      if (state.filter === 'all') filterLabels.push('كل المواد');
+      else if (state.filter === 'matched') filterLabels.push('مطابق بالباركود');
+      else if (state.filter === 'review') filterLabels.push('بحاجة مراجعة');
+      else if (state.filter === 'none') filterLabels.push('بدون تطابق');
+      else if (state.filter === 'reviewed') filterLabels.push('روجعت يدوياً');
+      else if (state.filter === 'duplicate') filterLabels.push('مكرّر التعريف');
+      if (state.branch) filterLabels.push('فرع: ' + state.branch);
+      if (state.search.trim()) filterLabels.push('بحث: ' + state.search.trim());
+      const filterDesc = filterLabels.join(' · ');
+
       const priceListRows = [];
       const sourceDetailRows = [];
       const unresolvedRows = [];
       let nMatchedBarcode = 0, nManual = 0, nUnresolved = 0;
 
-      for (const s of state.skyItems) {
+      for (const s of exportItems) {
         const eff = effective(s.item_code);
         if (eff.cost == null) {
           nUnresolved++;
@@ -609,7 +630,9 @@
       }
 
       const summaryRows = [
-        { 'البيان': 'إجمالي مواد Sky', 'القيمة': state.skyItems.length },
+        { 'البيان': 'نطاق التصدير (الفلتر الحالي)', 'القيمة': filterDesc },
+        { 'البيان': 'إجمالي مواد Sky (كل القاعدة)', 'القيمة': state.skyItems.length },
+        { 'البيان': 'مواد داخلة في التصدير (بعد الفلتر)', 'القيمة': exportItems.length },
         { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة بالباركود)', 'القيمة': nMatchedBarcode },
         { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة/تسعير يدوي)', 'القيمة': nManual },
         { 'البيان': 'مواد بدون تكلفة بعد (غير محلولة)', 'القيمة': nUnresolved },
@@ -633,7 +656,7 @@
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast('تم تنزيل الملف');
+      toast(`تم تنزيل الملف · ${exportItems.length} مادة (حسب الفلتر)`);
     } catch (e) {
       console.error(e);
       toast('حدث خطأ أثناء إنشاء الملف');
@@ -754,6 +777,11 @@
       state.page = 1;
       renderAll();
     }));
+    $('#statusSelect').addEventListener('change', (e) => {
+      state.filter = e.target.value || 'all';
+      state.page = 1;
+      renderAll();
+    });
     $('#searchBox').addEventListener('input', (e) => { state.search = e.target.value; state.page = 1; renderList(); });
     $('#branchSelect').addEventListener('change', (e) => { state.branch = e.target.value; state.page = 1; renderList(); });
     $('#prevPage').addEventListener('click', () => { state.page--; renderList(); window.scrollTo({ top: 0, behavior: 'smooth' }); });

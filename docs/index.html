@@ -55,6 +55,7 @@
         <div class="stat-tile" id="statReview" data-filter="review"><span class="num">0</span><span class="lbl">بحاجة مراجعة</span></div>
         <div class="stat-tile" id="statNone" data-filter="none"><span class="num">0</span><span class="lbl">بدون تطابق</span></div>
         <div class="stat-tile" id="statConfirmed" data-filter="reviewed"><span class="num">0</span><span class="lbl">روجعت يدوياً</span></div>
+        <div class="stat-tile" id="statDuplicate" data-filter="duplicate"><span class="num">0</span><span class="lbl">مكرّر التعريف</span></div>
       </div>
     </div>
 
@@ -65,7 +66,15 @@
     <div id="appShell" hidden>
       <div class="controls">
         <input type="search" id="searchBox" placeholder="ابحث بالاسم أو كود المادة...">
-        <select id="branchSelect">
+        <select id="statusSelect" aria-label="فلتر الحالة">
+          <option value="all">كل المواد</option>
+          <option value="matched">مطابق بالباركود</option>
+          <option value="review">بحاجة مراجعة</option>
+          <option value="none">بدون تطابق</option>
+          <option value="reviewed">روجعت يدوياً</option>
+          <option value="duplicate">مكرّر التعريف</option>
+        </select>
+        <select id="branchSelect" aria-label="فلتر الفرع">
           <option value="">كل الفروع</option>
         </select>
         <span class="spacer"></span>

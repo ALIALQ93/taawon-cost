@@ -286,6 +286,14 @@ body {
 .chip.review { background: var(--warn-soft); color: var(--warn); }
 .chip.none { background: var(--bad-soft); color: var(--bad); }
 .chip.confirmed { background: var(--accent-soft); color: var(--accent-soft-ink); }
+.chip.duplicate { background: var(--neutral-soft); color: var(--neutral); }
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.review-actions .btn { flex: 1 1 220px; }
 
 .cost-cell { text-align: left; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; min-width: 84px; }
 .cost-cell .old { color: var(--bad); text-decoration: line-through; display: block; font-size: 11px; }

@@ -16,7 +16,7 @@ create table public.profiles (
 
 create table public.reviews (
   item_code text primary key,
-  status text not null check (status in ('confirmed', 'manual_cost', 'no_match')),
+  status text not null check (status in ('confirmed', 'manual_cost', 'no_match', 'duplicate_def')),
   albayan_idx integer,
   cost_override numeric,
   reviewed_by uuid references auth.users (id) on delete set null,
@@ -25,6 +25,7 @@ create table public.reviews (
     (status = 'confirmed' and albayan_idx is not null and cost_override is null)
     or (status = 'manual_cost' and albayan_idx is null and cost_override is not null and cost_override > 0)
     or (status = 'no_match' and albayan_idx is null and cost_override is null)
+    or (status = 'duplicate_def' and albayan_idx is null and cost_override is null)
   )
 );
 

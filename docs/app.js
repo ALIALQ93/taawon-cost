@@ -52,6 +52,9 @@
       if (rev.status === 'no_match') {
         return { source: 'no_match', cost: null, albayan: null, albayan_idx: null, review: rev };
       }
+      if (rev.status === 'duplicate_def') {
+        return { source: 'duplicate_def', cost: null, albayan: null, albayan_idx: null, review: rev };
+      }
     }
     const m = state.matches[code];
     if (m && m.status === 'matched' && m.albayan_idx != null) {
@@ -65,7 +68,7 @@
     const eff = effective(code);
     if (eff.source === 'barcode') return 'matched';
     if (eff.source === 'manual_match' || eff.source === 'manual_cost') return 'confirmed';
-    if (eff.source === 'no_match') return 'confirmed';
+    if (eff.source === 'no_match' || eff.source === 'duplicate_def') return 'confirmed';
     const m = state.matches[code];
     if (m && m.status === 'needs_review') return 'review';
     return 'none';
@@ -113,7 +116,11 @@
   function chipHtml(code) {
     const st = statusOf(code);
     const rev = state.reviews[code];
-    if (rev) return `<span class="chip confirmed">✓ روجعت يدوياً</span>`;
+    if (rev) {
+      if (rev.status === 'no_match') return `<span class="chip none">✕ بلا تطابق</span>`;
+      if (rev.status === 'duplicate_def') return `<span class="chip duplicate">⚠ معرفة بأكثر من أسلوب</span>`;
+      return `<span class="chip confirmed">✓ روجعت يدوياً</span>`;
+    }
     if (st === 'matched') return `<span class="chip matched">✓ مطابق بالباركود</span>`;
     if (st === 'review') return `<span class="chip review">⚠ بحاجة مراجعة</span>`;
     return `<span class="chip none">✕ بدون تطابق</span>`;
@@ -136,6 +143,7 @@
     const eff = effective(s.item_code);
     if (eff.source === 'unresolved') return `<div class="cost-cell"><span class="pending">لم تُحسب بعد</span></div>`;
     if (eff.source === 'no_match') return `<div class="cost-cell"><span class="pending">بلا تكلفة مرجعية</span></div>`;
+    if (eff.source === 'duplicate_def') return `<div class="cost-cell"><span class="pending">تعريف مكرر — راجع التوحيد</span></div>`;
     const unit = dominantUnitLabel(s);
     let sub;
     if (eff.source === 'manual_cost') sub = 'تكلفة يدوية';
@@ -323,8 +331,15 @@
     }
 
     if (canReview()) {
-      body += `<div style="display:flex; gap:8px;">
-        <button class="btn" data-action="mark-no-match" style="flex:1;">${rev && rev.status === 'no_match' ? '✓ مُعلّمة: بلا تطابق' : 'تعليم: بلا تطابق (بحاجة تسعير يدوي لاحقاً في Sky)'}</button>
+      const noMatchLabel = rev && rev.status === 'no_match'
+        ? '✓ مُعلّمة: بلا تطابق'
+        : 'علم: بلا تطابق (بحاجة تسعير يدوي لاحقاً في Sky)';
+      const dupLabel = rev && rev.status === 'duplicate_def'
+        ? '✓ مُعلّمة: معرفة بأكثر من أسلوب'
+        : 'علم: المادة معرفة بأكثر من أسلوب مختلف';
+      body += `<div class="review-actions">
+        <button class="btn" data-action="mark-no-match">${noMatchLabel}</button>
+        <button class="btn" data-action="mark-duplicate-def">${dupLabel}</button>
         ${rev ? `<button class="btn ghost" data-action="clear-review">مسح المراجعة</button>` : ''}
       </div>`;
     } else {
@@ -351,6 +366,8 @@
     });
     const noMatchBtn = $('[data-action="mark-no-match"]', $('#modalBody'));
     if (noMatchBtn) noMatchBtn.addEventListener('click', () => saveReview(code, { status: 'no_match', albayan_idx: null, cost_override: null }));
+    const dupBtn = $('[data-action="mark-duplicate-def"]', $('#modalBody'));
+    if (dupBtn) dupBtn.addEventListener('click', () => saveReview(code, { status: 'duplicate_def', albayan_idx: null, cost_override: null }));
     const clearBtn = $('[data-action="clear-review"]', $('#modalBody'));
     if (clearBtn) clearBtn.addEventListener('click', () => clearReview(code));
 
@@ -549,7 +566,9 @@
             'كود المادة': s.item_code,
             'الاسم التجاري': s.name,
             'الفروع': s.branches.join('، '),
-            'الحالة': eff.source === 'no_match' ? 'معلّمة: بلا تطابق' : 'بدون مراجعة بعد',
+            'الحالة': eff.source === 'no_match' ? 'معلّمة: بلا تطابق'
+              : eff.source === 'duplicate_def' ? 'معلّمة: معرفة بأكثر من أسلوب'
+              : 'بدون مراجعة بعد',
           });
           continue;
         }

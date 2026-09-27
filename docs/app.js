@@ -639,6 +639,7 @@
       }
 
       const qtyMap = includeBalance ? buildQtyMap(lines) : null;
+      // Always build unit map for all exported rows (including unresolved)
       const exportItems = filteredItems();
       const filterLabels = [];
       if (state.filter === 'all') filterLabels.push('كل المواد');
@@ -650,7 +651,7 @@
       if (state.branch) filterLabels.push('فرع: ' + state.branch);
       if (state.search.trim()) filterLabels.push('بحث: ' + state.search.trim());
       filterLabels.push(includeName ? 'مع الاسم' : 'بدون اسم');
-      filterLabels.push(includeBalance ? 'مع الرصيد' : 'بدون رصيد');
+      filterLabels.push(includeBalance ? 'مع الكمية' : 'بدون كمية');
       const filterDesc = filterLabels.join(' · ');
 
       const priceListRows = [];
@@ -660,14 +661,16 @@
 
       for (const s of exportItems) {
         const eff = effective(s.item_code);
+        const unitName = dominantBaseUnit(s.item_code) || (s.base_units && s.base_units[0]) || (s.units && s.units[0]) || '';
         const bal = includeBalance ? itemBalance(s, eff, qtyMap) : null;
 
         if (eff.cost == null) {
           nUnresolved++;
           const urow = { 'كود المادة': s.item_code };
           if (includeName) urow['الاسم التجاري'] = s.name;
-          urow['الفروع'] = s.branches.join('، ');
-          if (includeBalance) urow['الرصيد'] = bal != null ? bal : '';
+          urow['الوحدة'] = unitName;
+          urow['الفروع'] = (s.branches || []).join('، ');
+          if (includeBalance) urow['الكمية'] = bal != null ? bal : '';
           urow['الحالة'] = eff.source === 'no_match' ? 'معلّمة: بلا تطابق'
             : eff.source === 'duplicate_def' ? 'معلّمة: معرفة بأكثر من أسلوب'
             : 'بدون مراجعة بعد';
@@ -677,33 +680,32 @@
         if (eff.source === 'barcode') nMatchedBarcode++;
         else nManual++;
 
-        const unitName = dominantBaseUnit(s.item_code) || s.base_units[0] || '';
         const priceOriginLabel =
           eff.source === 'manual_cost' ? 'تكلفة أُدخلت يدوياً (بدون مصدر من البيان)'
           : costSourceLabel(eff.albayan && eff.albayan.cost_source) === 'آخر شراء' ? 'آخر سعر شراء بالبيان القديم (السعر الوسطي غير متوفر لهذه المادة)'
           : 'السعر الوسطي بالبيان القديم';
 
-        // Sky import sheet stays template-compatible (no name/balance)
-        priceListRows.push({
-          code: s.item_code,
-          price_list_name: '',
-          currency_name: 'IQD',
-          unit_name: unitName,
-          price: Math.round(eff.cost),
-          min_quantity: 1,
-          max_quantity: '',
-          foc_for_each: 0,
-          foc_quantity: 0,
-          max_foc_quantity: 0,
-          discount_percentage: 0,
-          discount_active: 'FALSE',
-        });
+        const prow = { code: s.item_code };
+        if (includeName) prow.name = s.name || '';
+        prow.price_list_name = '';
+        prow.currency_name = 'IQD';
+        prow.unit_name = unitName;
+        prow.price = Math.round(eff.cost);
+        if (includeBalance) prow.quantity = bal != null ? bal : '';
+        prow.min_quantity = 1;
+        prow.max_quantity = '';
+        prow.foc_for_each = 0;
+        prow.foc_quantity = 0;
+        prow.max_foc_quantity = 0;
+        prow.discount_percentage = 0;
+        prow.discount_active = 'FALSE';
+        priceListRows.push(prow);
 
         const srow = { 'كود المادة (code)': s.item_code };
         if (includeName) srow['الاسم بSky'] = s.name;
         srow['الوحدة (unit_name)'] = unitName;
         srow['السعر المصدَّر (price)'] = Math.round(eff.cost);
-        if (includeBalance) srow['الرصيد'] = bal != null ? bal : '';
+        if (includeBalance) srow['الكمية'] = bal != null ? bal : '';
         srow['مصدر هذا السعر'] = priceOriginLabel;
         srow['طريقة المطابقة'] = eff.source === 'barcode' ? 'تلقائية بالباركود'
           : eff.source === 'manual_match' ? 'يدوية مؤكدة'
@@ -716,7 +718,7 @@
       const summaryRows = [
         { 'البيان': 'نطاق التصدير (الفلتر الحالي)', 'القيمة': filterDesc },
         { 'البيان': 'تضمين الاسم', 'القيمة': includeName ? 'نعم' : 'لا' },
-        { 'البيان': 'تضمين الرصيد', 'القيمة': includeBalance ? 'نعم' : 'لا' },
+        { 'البيان': 'تضمين الكمية/الرصيد', 'القيمة': includeBalance ? 'نعم' : 'لا' },
         { 'البيان': 'إجمالي مواد Sky (كل القاعدة)', 'القيمة': state.skyItems.length },
         { 'البيان': 'مواد داخلة في التصدير (بعد الفلتر)', 'القيمة': exportItems.length },
         { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة بالباركود)', 'القيمة': nMatchedBarcode },
@@ -735,7 +737,7 @@
 
       const tags = [];
       tags.push(includeName ? 'مع-اسم' : 'بدون-اسم');
-      tags.push(includeBalance ? 'مع-رصيد' : 'بدون-رصيد');
+      tags.push(includeBalance ? 'مع-كمية' : 'بدون-كمية');
       const fname = 'قائمة-اسعار-Sky-' + tags.join('-') + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

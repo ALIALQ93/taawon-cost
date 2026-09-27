@@ -439,6 +439,43 @@ body {
 
 .footnote { font-size: 12px; color: var(--ink-dim); line-height: 1.6; background: var(--surface-2); border-radius: 8px; padding: 10px 12px; }
 
+.export-modal { max-width: 420px; }
+.export-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-dim);
+  line-height: 1.55;
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.export-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14.5px;
+  -webkit-tap-highlight-color: transparent;
+}
+.export-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.export-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.export-actions .btn { min-width: 110px; }
+
 .toast {
   position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px;

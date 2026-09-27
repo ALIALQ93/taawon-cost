@@ -539,10 +539,86 @@
 
   // ---------------- export ----------------
 
-  async function exportExcel() {
+  const EXPORT_OPTS_KEY = 'taawon_export_opts_v1';
+
+  function loadExportOpts() {
+    try {
+      const raw = localStorage.getItem(EXPORT_OPTS_KEY);
+      if (!raw) return { includeName: true, includeBalance: false };
+      const o = JSON.parse(raw);
+      return {
+        includeName: o.includeName !== false,
+        includeBalance: !!o.includeBalance,
+      };
+    } catch (_) {
+      return { includeName: true, includeBalance: false };
+    }
+  }
+
+  function saveExportOpts(opts) {
+    try {
+      localStorage.setItem(EXPORT_OPTS_KEY, JSON.stringify(opts));
+    } catch (_) { /* ignore */ }
+  }
+
+  function openExportModal() {
     if (!canExport()) { toast('التصدير للمسؤول فقط'); return; }
-    const btn = $('#exportBtn');
+    const opts = loadExportOpts();
+    $('#exportIncludeName').checked = opts.includeName;
+    $('#exportIncludeBalance').checked = opts.includeBalance;
+    $('#exportOverlay').hidden = false;
+  }
+
+  function closeExportModal() {
+    $('#exportOverlay').hidden = true;
+  }
+
+  function pickNum(...vals) {
+    for (const v of vals) {
+      if (v === null || v === undefined || v === '') continue;
+      const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
+      if (!Number.isNaN(n)) return n;
+    }
+    return null;
+  }
+
+  function balanceFromRecord(rec) {
+    if (!rec) return null;
+    return pickNum(
+      rec.balance, rec.qty, rec.quantity, rec.stock, rec.on_hand,
+      rec.qty_on_hand, rec.stock_qty, rec.الرصيد
+    );
+  }
+
+  function buildQtyMap(lines) {
+    const map = new Map(); // item_code -> sum
+    for (const l of lines || []) {
+      const code = l.item_code;
+      if (!code) continue;
+      const q = pickNum(l.qty, l.quantity, l.balance, l.stock, l.on_hand, l.stock_qty);
+      if (q == null) continue;
+      map.set(code, (map.get(code) || 0) + q);
+    }
+    return map;
+  }
+
+  function itemBalance(s, eff, qtyMap) {
+    const fromItem = balanceFromRecord(s);
+    if (fromItem != null) return fromItem;
+    if (qtyMap && qtyMap.has(s.item_code)) return qtyMap.get(s.item_code);
+    return balanceFromRecord(eff && eff.albayan);
+  }
+
+  async function exportExcel(opts) {
+    if (!canExport()) { toast('التصدير للمسؤول فقط'); return; }
+    const includeName = !!(opts && opts.includeName);
+    const includeBalance = !!(opts && opts.includeBalance);
+    saveExportOpts({ includeName, includeBalance });
+
+    const btn = $('#exportConfirmBtn') || $('#exportBtn');
+    const triggerBtn = $('#exportBtn');
     btn.disabled = true;
+    if (triggerBtn) triggerBtn.disabled = true;
     const originalText = btn.textContent;
     btn.textContent = 'جاري التحضير...';
     try {
@@ -562,6 +638,7 @@
         return Array.from(m.entries()).sort((a, b) => b[1] - a[1])[0][0];
       }
 
+      const qtyMap = includeBalance ? buildQtyMap(lines) : null;
       const exportItems = filteredItems();
       const filterLabels = [];
       if (state.filter === 'all') filterLabels.push('كل المواد');
@@ -572,6 +649,8 @@
       else if (state.filter === 'duplicate') filterLabels.push('مكرّر التعريف');
       if (state.branch) filterLabels.push('فرع: ' + state.branch);
       if (state.search.trim()) filterLabels.push('بحث: ' + state.search.trim());
+      filterLabels.push(includeName ? 'مع الاسم' : 'بدون اسم');
+      filterLabels.push(includeBalance ? 'مع الرصيد' : 'بدون رصيد');
       const filterDesc = filterLabels.join(' · ');
 
       const priceListRows = [];
@@ -581,16 +660,18 @@
 
       for (const s of exportItems) {
         const eff = effective(s.item_code);
+        const bal = includeBalance ? itemBalance(s, eff, qtyMap) : null;
+
         if (eff.cost == null) {
           nUnresolved++;
-          unresolvedRows.push({
-            'كود المادة': s.item_code,
-            'الاسم التجاري': s.name,
-            'الفروع': s.branches.join('، '),
-            'الحالة': eff.source === 'no_match' ? 'معلّمة: بلا تطابق'
-              : eff.source === 'duplicate_def' ? 'معلّمة: معرفة بأكثر من أسلوب'
-              : 'بدون مراجعة بعد',
-          });
+          const urow = { 'كود المادة': s.item_code };
+          if (includeName) urow['الاسم التجاري'] = s.name;
+          urow['الفروع'] = s.branches.join('، ');
+          if (includeBalance) urow['الرصيد'] = bal != null ? bal : '';
+          urow['الحالة'] = eff.source === 'no_match' ? 'معلّمة: بلا تطابق'
+            : eff.source === 'duplicate_def' ? 'معلّمة: معرفة بأكثر من أسلوب'
+            : 'بدون مراجعة بعد';
+          unresolvedRows.push(urow);
           continue;
         }
         if (eff.source === 'barcode') nMatchedBarcode++;
@@ -602,6 +683,7 @@
           : costSourceLabel(eff.albayan && eff.albayan.cost_source) === 'آخر شراء' ? 'آخر سعر شراء بالبيان القديم (السعر الوسطي غير متوفر لهذه المادة)'
           : 'السعر الوسطي بالبيان القديم';
 
+        // Sky import sheet stays template-compatible (no name/balance)
         priceListRows.push({
           code: s.item_code,
           price_list_name: '',
@@ -617,20 +699,24 @@
           discount_active: 'FALSE',
         });
 
-        sourceDetailRows.push({
-          'كود المادة (code)': s.item_code,
-          'الاسم بSky': s.name,
-          'الوحدة (unit_name)': unitName,
-          'السعر المصدَّر (price)': Math.round(eff.cost),
-          'مصدر هذا السعر': priceOriginLabel,
-          'طريقة المطابقة': eff.source === 'barcode' ? 'تلقائية بالباركود' : eff.source === 'manual_match' ? 'يدوية مؤكدة' : 'تكلفة يدوية بدون مطابقة',
-          'اسم المادة المطابقة بالبيان': eff.albayan ? eff.albayan.name : '',
-          'باركود المادة المطابقة بالبيان': eff.albayan ? eff.albayan.barcode_raw : '',
-        });
+        const srow = { 'كود المادة (code)': s.item_code };
+        if (includeName) srow['الاسم بSky'] = s.name;
+        srow['الوحدة (unit_name)'] = unitName;
+        srow['السعر المصدَّر (price)'] = Math.round(eff.cost);
+        if (includeBalance) srow['الرصيد'] = bal != null ? bal : '';
+        srow['مصدر هذا السعر'] = priceOriginLabel;
+        srow['طريقة المطابقة'] = eff.source === 'barcode' ? 'تلقائية بالباركود'
+          : eff.source === 'manual_match' ? 'يدوية مؤكدة'
+          : 'تكلفة يدوية بدون مطابقة';
+        if (includeName) srow['اسم المادة المطابقة بالبيان'] = eff.albayan ? eff.albayan.name : '';
+        srow['باركود المادة المطابقة بالبيان'] = eff.albayan ? eff.albayan.barcode_raw : '';
+        sourceDetailRows.push(srow);
       }
 
       const summaryRows = [
         { 'البيان': 'نطاق التصدير (الفلتر الحالي)', 'القيمة': filterDesc },
+        { 'البيان': 'تضمين الاسم', 'القيمة': includeName ? 'نعم' : 'لا' },
+        { 'البيان': 'تضمين الرصيد', 'القيمة': includeBalance ? 'نعم' : 'لا' },
         { 'البيان': 'إجمالي مواد Sky (كل القاعدة)', 'القيمة': state.skyItems.length },
         { 'البيان': 'مواد داخلة في التصدير (بعد الفلتر)', 'القيمة': exportItems.length },
         { 'البيان': 'مواد جاهزة بقائمة الأسعار (مطابقة بالباركود)', 'القيمة': nMatchedBarcode },
@@ -647,7 +733,10 @@
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([wbout], { type: 'application/octet-stream' });
 
-      const fname = 'قائمة-اسعار-Sky-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      const tags = [];
+      tags.push(includeName ? 'مع-اسم' : 'بدون-اسم');
+      tags.push(includeBalance ? 'مع-رصيد' : 'بدون-رصيد');
+      const fname = 'قائمة-اسعار-Sky-' + tags.join('-') + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -656,13 +745,15 @@
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast(`تم تنزيل الملف · ${exportItems.length} مادة (حسب الفلتر)`);
+      closeExportModal();
+      toast(`تم تنزيل الملف · ${exportItems.length} مادة`);
     } catch (e) {
       console.error(e);
       toast('حدث خطأ أثناء إنشاء الملف');
     } finally {
       btn.disabled = false;
       btn.textContent = originalText;
+      if (triggerBtn) triggerBtn.disabled = false;
     }
   }
 
@@ -786,10 +877,25 @@
     $('#branchSelect').addEventListener('change', (e) => { state.branch = e.target.value; state.page = 1; renderList(); });
     $('#prevPage').addEventListener('click', () => { state.page--; renderList(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
     $('#nextPage').addEventListener('click', () => { state.page++; renderList(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
-    $('#exportBtn').addEventListener('click', exportExcel);
+    $('#exportBtn').addEventListener('click', openExportModal);
+    $('#exportConfirmBtn').addEventListener('click', () => {
+      exportExcel({
+        includeName: $('#exportIncludeName').checked,
+        includeBalance: $('#exportIncludeBalance').checked,
+      });
+    });
+    $('#exportCancelBtn').addEventListener('click', closeExportModal);
+    $('#closeExportModal').addEventListener('click', closeExportModal);
+    $('#exportOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'exportOverlay') closeExportModal();
+    });
     $('#closeModal').addEventListener('click', closeModal);
     $('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeModal(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!$('#exportOverlay').hidden) closeExportModal();
+      else closeModal();
+    });
   }
 
   async function boot() {

@@ -90,9 +90,9 @@
       </div>
 
       <div class="footnote" style="margin-top:20px;">
-        ملاحظتان: (1) ورقة "Prices" بملف التصدير جاهزة للاستيراد المباشر بSky — ظاهرة للمسؤول فقط.
-        (2) المراجعات تُحفظ أونلاين على Supabase ويشاركها الفريق حسب الدور:
-        مشاهد / مراجع / مسؤول (التكلفة للمسؤول فقط).
+        ملاحظات: (1) ورقة "Prices" جاهزة لاستيراد Sky كما هي.
+        (2) عند التصدير يمكنك اختيار تضمين الاسم و/أو الرصيد في أوراق المراجعة.
+        (3) المراجعات تُحفظ أونلاين — التكلفة ظاهرة للمسؤول فقط.
       </div>
     </div>
   </div>
@@ -107,6 +107,33 @@
         <button class="modal-close" id="closeModal" type="button" aria-label="إغلاق">✕</button>
       </div>
       <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="exportOverlay" hidden>
+    <div class="modal export-modal">
+      <div class="modal-head">
+        <div>
+          <h2>خيارات تصدير Excel</h2>
+          <div class="sub">اختر الأعمدة الإضافية ثم أكّد التنزيل</div>
+        </div>
+        <button class="modal-close" id="closeExportModal" type="button" aria-label="إغلاق">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="export-hint">ورقة <strong>Prices</strong> تبقى بصيغة استيراد Sky. الاسم والرصيد يُضافان اختيارياً في أوراق المراجعة.</p>
+        <label class="export-check">
+          <input type="checkbox" id="exportIncludeName" checked>
+          <span>تضمين الاسم</span>
+        </label>
+        <label class="export-check">
+          <input type="checkbox" id="exportIncludeBalance">
+          <span>تضمين الرصيد</span>
+        </label>
+        <div class="export-actions">
+          <button type="button" class="btn ghost" id="exportCancelBtn">إلغاء</button>
+          <button type="button" class="btn primary" id="exportConfirmBtn">تنزيل Excel</button>
+        </div>
+      </div>
     </div>
   </div>
 
